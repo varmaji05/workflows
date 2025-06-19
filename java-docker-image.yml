@@ -1,0 +1,64 @@
+name: CI - Java Build and Docker Push
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-maven-
+
+      - name: Compile and test
+        run: mvn clean install -DskipTests=false
+
+      - name: Run code quality checks (example: OWASP dep check)
+        run: mvn org.owasp:dependency-check-maven:check
+
+      - name: Set up Docker build info
+        run: echo "IMAGE_TAG=dev-${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: arn:aws:iam::<account_id>:role/github-ecr-role
+          aws-region: us-east-1
+
+      - name: Login to ECR Docker
+        run: |
+          aws ecr get-login-password --region us-east-1 | \
+            docker login --username AWS --password-stdin <aws_account_id>.dkr.ecr.us-east-1.amazonaws.com
+
+      - name: Build Docker image
+        run: |
+          docker build -t <repo>:${{ env.IMAGE_TAG }} .
+
+      - name: Scan image using Trivy (optional)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '<repo>:${{ env.IMAGE_TAG }}'
+
+      - name: Push image to ECR
+        run: |
+          docker push <repo>:${{ env.IMAGE_TAG }}
